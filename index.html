@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>수원 동별 미세먼지 조회</title>
+  <title>수원 동별 미세먼지 & 로보카 제어 대시보드</title>
   <style>
     :root {
       --navy: #102a43;
@@ -65,11 +65,13 @@
     .help { margin: 10px 2px 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
     .dashboard { margin-top: 24px; }
-    @keyframes show { from { opacity: 0; transform: translateY(8px); } }
-
     .dash-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .dash-head h2 { margin: 0; font-size: 24px; }
+    
+    .btn-group { display: flex; gap: 8px; }
     .refresh { padding: 10px 15px; color: var(--blue); background: var(--sky); }
+    .connect-btn { padding: 10px 15px; color: white; background: var(--navy); }
+
     .station-search {
       display: flex;
       gap: 10px;
@@ -99,7 +101,6 @@
     .grade { margin-top: 9px; font-weight: 800; }
     .meta { margin: 20px 2px 0; color: var(--muted); font-size: 14px; }
     .message { min-height: 22px; margin: 14px 2px 0; font-size: 14px; color: #d14343; }
-    .loading { opacity: .55; }
 
     footer { padding: 0 15px 25px; text-align: center; color: var(--muted); font-size: 13px; }
 
@@ -115,7 +116,7 @@
 <body>
   <header>
     <h1>수원 지역 공공데이터 대시보드</h1>
-    <p>수원 지역 측정소의 실시간 미세먼지 정보를 확인합니다.</p>
+    <p>수원 측정소 실시간 미세먼지 확인 및 로보카 연동 제어</p>
   </header>
 
   <main>
@@ -124,13 +125,16 @@
         <input id="serviceKey" type="password" placeholder="공공데이터포털 일반 인증키(Decoding)를 입력하세요">
         <button class="save-btn" onclick="saveKey()">인증키 저장</button>
       </div>
-      <p class="help">인증키는 이 브라우저에만 저장되며 GitHub에 올라가지 않습니다. 에어코리아 대기오염정보 API의 활용신청이 필요합니다.</p>
+      <p class="help">인증키는 이 브라우저에만 저장되며 외부로 유출되지 않습니다.</p>
     </section>
 
     <section id="dust" class="dashboard">
       <div class="dash-head">
-        <h2>수원 미세먼지</h2>
-        <button class="refresh" onclick="loadDust()">새로고침</button>
+        <h2>수원 미세먼지 & 로보카</h2>
+        <div class="btn-group">
+          <button class="connect-btn" onclick="connectSerial()">로보카 연결</button>
+          <button class="refresh" onclick="loadDust()">새로고침</button>
+        </div>
       </div>
       <div class="station-search">
         <label for="stationName">조회할 동</label>
@@ -168,11 +172,44 @@
     const keyInput = document.getElementById("serviceKey");
     const stationInput = document.getElementById("stationName");
     const SUWON_STATIONS = ["인계동", "천천동", "신풍동", "영통동", "호매실동", "고색동", "광교동"];
+    
     keyInput.value = localStorage.getItem("publicDataServiceKey") || "";
     stationInput.value = localStorage.getItem("suwonDustStation") || "";
     stationInput.addEventListener("keydown", event => {
       if (event.key === "Enter") loadDust();
     });
+
+    let serialPort, serialWriter;
+
+    // 아두이노(로보카) 웹 시리얼 연결 함수
+    async function connectSerial() {
+      try {
+        if (!navigator.serial) {
+          alert("현재 브라우저는 Web Serial을 지원하지 않습니다. 구글 크롬(Chrome)을 사용해 주세요.");
+          return;
+        }
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 115200 });
+        const textEncoder = new TextEncoderStream();
+        textEncoder.readable.pipeTo(serialPort.writable);
+        serialWriter = textEncoder.writable.getWriter();
+        alert("로보카(아두이노)와 성공적으로 연결되었습니다!");
+      } catch (error) {
+        alert("연결 실패 또는 취소됨: " + error.message);
+      }
+    }
+
+    // 아두이노로 미세먼지 등급 명령어 전송 함수
+    async function sendToArduino(gradeText) {
+      if (!serialWriter) return; // 연결 안 되어 있으면 무시
+      let cmd = "NORMAL\n";
+      if (gradeText.includes("좋음")) cmd = "GOOD\n";
+      else if (gradeText.includes("보통")) cmd = "NORMAL\n";
+      else if (gradeText.includes("나쁨") && !gradeText.includes("매우")) cmd = "BAD\n";
+      else if (gradeText.includes("매우 나쁨")) cmd = "VERY_BAD\n";
+      
+      await serialWriter.write(cmd);
+    }
 
     function saveKey() {
       const key = keyInput.value.trim();
@@ -213,10 +250,13 @@
         if (header?.resultCode !== "00") throw new Error(header?.resultMsg || "대기 데이터를 받지 못했습니다.");
         const item = data.response?.body?.items?.[0];
         if (!item) throw new Error(`${stationName} 측정소 데이터가 없습니다.`);
+        
         document.getElementById("pm10").textContent = validValue(item.pm10Value);
         document.getElementById("pm25").textContent = validValue(item.pm25Value);
+        
         setGrade("pm10Grade", Number(item.pm10Value), "pm10");
         setGrade("pm25Grade", Number(item.pm25Value), "pm25");
+        
         document.getElementById("dustMeta").textContent = `에어코리아 · ${stationName} 측정소 · ${item.dataTime || "측정시각 없음"}`;
       } catch (error) {
         message.textContent = "⚠️ " + error.message;
@@ -242,8 +282,14 @@
         ["나쁨", "#e28b19"], ["매우 나쁨", "#d14343"]
       ];
       const index = value <= limits[0] ? 0 : value <= limits[1] ? 1 : value <= limits[2] ? 2 : 3;
+      
       element.textContent = `등급: ${grades[index][0]}`;
       element.style.color = grades[index][1];
+
+      // PM10 기준 대표 등급을 아두이노(로보카)로 전송
+      if (type === "pm10") {
+        sendToArduino(grades[index][0]);
+      }
     }
   </script>
 </body>
