@@ -1,0 +1,72 @@
+#include "BluetoothSerial.h"
+#include <Adafruit_NeoPixel.h>
+
+BluetoothSerial SerialBT;
+Adafruit_NeoPixel strip(2, 27, NEO_GRB + NEO_KHZ800);
+
+// 모터 드라이버 핀 설정
+const int PWMA = 19; 
+const int PWMB = 18;
+const int AIN1 = 33; 
+const int AIN2 = 32;
+const int BIN1 = 25; 
+const int BIN2 = 26;
+const int STBY = 5;
+
+void setup() {
+  Serial.begin(115200);
+  SerialBT.begin("esp32-car"); // 블루투스 이름
+  
+  pinMode(STBY, OUTPUT); digitalWrite(STBY, HIGH);
+  pinMode(PWMA, OUTPUT); pinMode(PWMB, OUTPUT);
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+  
+  strip.begin(); 
+  strip.show();
+}
+
+void loop() {
+  if (SerialBT.available()) {
+    // 앱에서 보낸 전체 데이터 읽기 (예: F,50 또는 S 등)
+    String data = SerialBT.readStringUntil('\n');
+    data.trim(); 
+
+    if (data.length() > 0) {
+      char currentDir = data[0]; // 첫 글자 (F, B, S)
+
+      if (currentDir == 'S') {
+        analogWrite(PWMA, 0);
+        analogWrite(PWMB, 0);
+      } 
+      // 전진 또는 후진 상태일 때
+      else {
+        int baseSpeed = 150; // 기본 속도
+        int tiltVal = 0;     // 기울기 값
+
+        // 쉼표(,)가 포함되어 있다면 뒤의 기울기 값을 파싱
+        int commaIndex = data.indexOf(',');
+        if (commaIndex != -1) {
+          tiltVal = data.substring(commaIndex + 1).toInt();
+        }
+        
+        // 좌우 기울기 값을 기본 속도에 더하고 빼서 회전 구현
+        int leftSpeed = baseSpeed + tiltVal;
+        int rightSpeed = baseSpeed - tiltVal;
+
+        // 속도 범위를 0~255로 제한
+        analogWrite(PWMA, constrain(abs(leftSpeed), 0, 255));
+        analogWrite(PWMB, constrain(abs(rightSpeed), 0, 255));
+
+        if (currentDir == 'F') { // 전진 방향
+          digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH);
+          digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW);
+        } 
+        else if (currentDir == 'B') { // 후진 방향
+          digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);
+          digitalWrite(BIN1, LOW);  digitalWrite(BIN2, HIGH);
+        }
+      }
+    }
+  }
+}
